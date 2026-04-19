@@ -10,8 +10,10 @@ Two modes:
 ## Install
 
 ```bash
-uv pip install ccauth
-patchright install --with-deps chrome  # only needed for cookie-based mode
+pip install git+https://github.com/synacktraa/ccauth.git
+
+# Chrome (only needed for cookie-based mode)
+patchright install --with-deps chrome
 ```
 
 ## Usage
