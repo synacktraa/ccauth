@@ -87,6 +87,11 @@ def open_and_wait(
             channel="chrome",
             headless=False,
             no_viewport=True,
+            # QUIC over UDP is unreliable inside some sandbox NATs (Daytona);
+            # mid-handshake drops surface as ERR_QUIC_PROTOCOL_ERROR and don't
+            # auto-fall-back. Force HTTP/2 over TCP. UseDnsHttpsSvcb must also
+            # be off, otherwise DNS HTTPS records can re-enable h3.
+            args=["--disable-quic", "--disable-features=UseDnsHttpsSvcb"],
         )
         try:
             context.add_cookies(cookies)
