@@ -1,16 +1,22 @@
 """Cookie-based mode: drive headed Chrome via patchright with injected cookies."""
 
+from __future__ import annotations
+
+import asyncio
 import json
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from ..errors import ModeError
 from ._callback import CallbackServer
 
 if TYPE_CHECKING:
+    from patchright.async_api import Page as AsyncPage
     from patchright.sync_api import Page
+
+    from ccauth.handoff.config import HandoffConfig
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +80,41 @@ def open_and_wait(
     cookies: list[dict[str, Any]],
     *,
     process_page: Callable[["Page"], None] | None = None,
+    process_page_async: Callable[["AsyncPage"], Coroutine[Any, Any, None]] | None = None,
     timeout: float = 180.0,
+    handoff: "HandoffConfig | None" = None,
 ) -> str:
+    """Run the cookie-based OAuth flow.
+
+    Args:
+        authorize_url: The OAuth authorize URL.
+        server: The callback server waiting for the OAuth code.
+        cookies: Converted cookies to inject into the browser.
+        process_page: Sync callback to process the page (used when handoff is None).
+        process_page_async: Async callback to process the page (used when handoff is set).
+        timeout: Timeout for waiting for callback URL.
+        handoff: Optional handoff configuration. When set, uses async path with
+            human-in-the-loop fallback.
+
+    Returns:
+        The OAuth authorization code.
+    """
+    # Route to async path when handoff is configured
+    if handoff is not None:
+        from ccauth.handoff.runner import open_and_wait_async
+
+        return asyncio.run(
+            open_and_wait_async(
+                authorize_url=authorize_url,
+                callback_server=server,
+                cookies=cookies,
+                handoff=handoff,
+                process_page=process_page_async,
+                timeout=timeout,
+            )
+        )
+
+    # Original sync path (unchanged behavior when handoff is None)
     from patchright.sync_api import sync_playwright
 
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,7 @@
 """Orchestrator: run the Claude Code OAuth flow end-to-end."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -9,7 +11,10 @@ from .modes import cookie_based, default_browser, start_callback_server
 from .oauth import build_authorize_url, exchange_code, generate_pkce, generate_state
 
 if TYPE_CHECKING:
+    from patchright.async_api import Page as AsyncPage
     from patchright.sync_api import Page
+
+    from ccauth.handoff.config import HandoffConfig
 
 AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize"
 TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
@@ -34,13 +39,23 @@ _ORG_TYPE_TO_SUB = {
 
 
 def _click_authorize(page: "Page") -> None:
-    """Click the 'Authorize' button on Claude's consent page.
+    """Click the 'Authorize' button on Claude's consent page (sync version).
 
     Waits up to 60s for visibility so Cloudflare Turnstile has time to clear.
     """
     btn = page.get_by_role("button", name="Authorize", exact=True).first
     btn.wait_for(state="visible", timeout=60000)
     btn.click()
+
+
+async def _click_authorize_async(page: "AsyncPage") -> None:
+    """Click the 'Authorize' button on Claude's consent page (async version).
+
+    Waits up to 60s for visibility so Cloudflare Turnstile has time to clear.
+    """
+    btn = page.get_by_role("button", name="Authorize", exact=True).first
+    await btn.wait_for(state="visible", timeout=60000)
+    await btn.click()
 
 
 def _fetch_profile(access_token: str) -> dict[str, Any]:
@@ -60,7 +75,20 @@ def _fetch_profile(access_token: str) -> dict[str, Any]:
     return response.json()
 
 
-def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def run_auth(
+    cookies: list[dict[str, Any]] | None = None,
+    handoff: "HandoffConfig | None" = None,
+) -> dict[str, Any]:
+    """Run the Claude Code OAuth flow.
+
+    Args:
+        cookies: Optional cookies to use for cookie-based mode.
+        handoff: Optional handoff configuration for human-in-the-loop fallback.
+            Only applies to cookie-based mode.
+
+    Returns:
+        The credentials payload for ~/.claude/.credentials.json.
+    """
     pkce = generate_pkce()
     state = generate_state()
 
@@ -79,7 +107,12 @@ def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
 
     if cookies is not None:
         code = cookie_based.open_and_wait(
-            authorize_url, server, cookies, process_page=_click_authorize
+            authorize_url,
+            server,
+            cookies,
+            process_page=_click_authorize,
+            process_page_async=_click_authorize_async,
+            handoff=handoff,
         )
     else:
         code = default_browser.open_and_wait(authorize_url, server)

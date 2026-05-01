@@ -87,6 +87,73 @@ This is the headless-friendly path. The trick: Anthropic's `/oauth/authorize` pa
 
 If step 5 throws (e.g. the button never appears), the raised `ModeError` carries the final page URL and full HTML as `url` and `html` fields in the CLI's error JSON, so you can see what Cloudflare or Anthropic actually rendered.
 
+## Handoff mode (human-in-the-loop)
+
+When running in a sandbox or CI environment, the automated cookie-based flow might get stuck due to:
+
+- Cloudflare Turnstile challenges that require human interaction
+- Expired or invalid session cookies requiring re-login
+- Other unexpected blockers
+
+**Handoff mode** provides a fallback: when the automated flow stalls, ccauth exposes a browser-streamed UI so a human can complete the OAuth steps manually. On success, ccauth continues as normal and emits the credentials JSON.
+
+### Install with handoff support
+
+```bash
+pip install "ccauth[handoff] @ git+https://github.com/synacktraa/ccauth.git"
+```
+
+### Configuration
+
+Create a config file at `~/.ccauth/config.toml` (or specify a custom path via `--config` or `CCAUTH_CONFIG` env var):
+
+```toml
+[handoff]
+notify = ["slack"]      # List of notifiers to fire when handoff triggers
+host = "0.0.0.0"        # Bind to all interfaces (required for proxy access)
+port = 8080
+timeout = 600           # Seconds to wait for user to complete OAuth
+
+# Optional: Public URL for notifications (required in sandboxed environments)
+# If running in Daytona or similar, set this to the proxy URL
+public_base = "https://8080-abc123.daytonaproxy01.net"
+
+[handoff.slack]
+webhook_url = "https://hooks.slack.com/services/..."
+# Or use bot token + channel:
+# bot_token = "xoxb-..."
+# channel = "#ops"
+```
+
+### CLI usage
+
+```bash
+ccauth --cookies cookies.json --handoff
+```
+
+When the automated flow gets stuck, ccauth will:
+
+1. Re-navigate to the OAuth page for a clean starting state
+2. Start a browser-streaming server
+3. Send notifications via configured notifiers (Slack, etc.) with the stream URL
+4. Log the stream URL to stderr
+5. Wait for a human to complete the OAuth flow via the streamed UI
+6. Continue with token exchange once the OAuth callback is received
+
+### Sandboxed environments (Daytona, containers)
+
+When running inside a sandbox, `localhost` URLs in notifications won't be reachable from outside. Use `public_base` to specify the externally-accessible URL:
+
+```toml
+[handoff]
+notify = ["slack"]
+host = "0.0.0.0"
+port = 8080
+public_base = "https://8080-your-workspace-id.daytonaproxy01.net"
+```
+
+The server still binds to `{host}:{port}`, but notifications will contain the `public_base` URL instead.
+
 ## Python API
 
 ```python
@@ -99,4 +166,18 @@ creds = run_auth()
 import json
 cookies = json.load(open("path/to/cookies.json"))
 creds = run_auth(cookies=cookies)
+
+# Cookie-based mode with handoff
+from ccauth.handoff import HandoffConfig, SlackNotifier
+
+creds = run_auth(
+    cookies=cookies,
+    handoff=HandoffConfig(
+        notifiers=[SlackNotifier(webhook_url="https://hooks.slack.com/...")],
+        host="0.0.0.0",
+        port=8080,
+        timeout=600.0,
+        public_base="https://8080-abc123.daytonaproxy01.net",  # Optional
+    ),
+)
 ```
