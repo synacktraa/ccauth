@@ -30,8 +30,6 @@ jinja_env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=True)
 # Known blocker URL patterns that trigger immediate handoff
 BLOCKER_URL_PATTERNS = [
     re.compile(r"/login", re.IGNORECASE),
-    re.compile(r"/sign-?in", re.IGNORECASE),
-    re.compile(r"/challenge", re.IGNORECASE),
 ]
 
 # Content patterns that indicate a Cloudflare challenge page
