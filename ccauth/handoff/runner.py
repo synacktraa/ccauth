@@ -28,14 +28,46 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 jinja_env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=True)
 
 # Known blocker URL patterns that trigger immediate handoff
-BLOCKER_PATTERNS = [
+BLOCKER_URL_PATTERNS = [
     re.compile(r"/login", re.IGNORECASE),
     re.compile(r"/sign-?in", re.IGNORECASE),
     re.compile(r"/challenge", re.IGNORECASE),
 ]
 
+# Content patterns that indicate a Cloudflare challenge page
+# Cloudflare serves challenge pages at the same URL, so we need to check content
+CLOUDFLARE_CHALLENGE_INDICATORS = [
+    "Just a moment...",  # Page title
+    "Performing security verification",  # Challenge text
+    "challenges.cloudflare.com",  # Turnstile iframe source
+    "cf-chl-widget",  # Cloudflare challenge widget ID prefix
+]
+
 # Default viewport size for the browser
 VIEWPORT_SIZE = {"width": 1280, "height": 800}
+
+
+async def _is_cloudflare_challenge(page: "Page") -> bool:
+    """Check if the current page is a Cloudflare challenge page.
+
+    Cloudflare serves challenge pages at the same URL as the target,
+    so we need to inspect the page content to detect them.
+    """
+    try:
+        # Check page title
+        title = await page.title()
+        if "Just a moment" in title:
+            return True
+
+        # Check for Cloudflare-specific elements in HTML
+        html = await page.content()
+        for indicator in CLOUDFLARE_CHALLENGE_INDICATORS:
+            if indicator in html:
+                return True
+
+        return False
+    except Exception:
+        return False
 
 
 async def open_and_wait_async(
@@ -94,10 +126,14 @@ async def open_and_wait_async(
 
             # Check for known blocker URLs
             current_url = page.url
-            for pattern in BLOCKER_PATTERNS:
+            for pattern in BLOCKER_URL_PATTERNS:
                 if pattern.search(current_url):
                     handoff_reason = f"Login required (redirected to {current_url})"
                     break
+
+            # Check for Cloudflare challenge page (served at same URL)
+            if handoff_reason is None and await _is_cloudflare_challenge(page):
+                handoff_reason = "Cloudflare security challenge detected"
 
             # Try process_page if no blocker detected
             if handoff_reason is None and process_page is not None:
