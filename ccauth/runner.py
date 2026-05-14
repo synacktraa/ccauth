@@ -1,11 +1,11 @@
 """Orchestrator: run the Claude Code OAuth flow end-to-end."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
 from .errors import AuthError
-from .modes import cookie_based, default_browser, start_callback_server
+from .modes import cookie_based, default_browser, CallbackServer
 from .oauth import build_authorize_url, exchange_code, generate_pkce, generate_state
 
 if TYPE_CHECKING:
@@ -60,36 +60,36 @@ def _fetch_profile(access_token: str) -> dict[str, Any]:
     return response.json()
 
 
-def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+class CaptureCodeCallback(Protocol):
+    def __call__(
+        self, authorize_url: str, server: CallbackServer
+    ) -> str: ...
+
+
+def run_auth_custom(cb: CaptureCodeCallback) -> dict[str, Any]:
     pkce = generate_pkce()
     state = generate_state()
 
-    server = start_callback_server(expected_state=state, callback_path=CALLBACK_PATH)
-    redirect_uri = f"http://localhost:{server.port}{CALLBACK_PATH}"
+    server = CallbackServer.create(expected_state=state, path=CALLBACK_PATH)
 
     authorize_url = build_authorize_url(
         authorize_url=AUTHORIZE_URL,
         client_id=CLIENT_ID,
-        redirect_uri=redirect_uri,
+        redirect_uri=server.redirect_uri,
         scope=SCOPE,
         code_challenge=pkce.challenge,
         state=state,
         extra_params={"code": "true"},
     )
 
-    if cookies is not None:
-        code = cookie_based.open_and_wait(
-            authorize_url, server, cookies, process_page=_click_authorize
-        )
-    else:
-        code = default_browser.open_and_wait(authorize_url, server)
-
+    code = cb(authorize_url, server)
+    
     tokens = exchange_code(
         token_url=TOKEN_URL,
         client_id=CLIENT_ID,
         code=code,
         code_verifier=pkce.verifier,
-        redirect_uri=redirect_uri,
+        redirect_uri=server.redirect_uri,
         state=state,
         user_agent=USER_AGENT,
     )
@@ -106,4 +106,16 @@ def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
             "subscriptionType": _ORG_TYPE_TO_SUB.get(org.get("organization_type") or ""),
             "rateLimitTier": org.get("rate_limit_tier"),
         }
-    }
+    }    
+
+def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    if cookies is not None:
+        return run_auth_custom(
+            lambda url, server: cookie_based.open_and_wait(
+                url, server, cookies, process_page=_click_authorize
+            )
+        )
+    else:
+        return run_auth_custom(
+            lambda url, server: default_browser.open_and_wait(url, server)
+        )

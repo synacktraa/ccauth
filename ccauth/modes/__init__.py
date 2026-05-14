@@ -1,4 +1,4 @@
 from . import cookie_based, default_browser
-from ._callback import CallbackServer, start_callback_server
+from ._callback import CallbackServer
 
-__all__ = ["CallbackServer", "start_callback_server", "default_browser", "cookie_based"]
+__all__ = ["CallbackServer", "default_browser", "cookie_based"]
