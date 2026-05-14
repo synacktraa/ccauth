@@ -66,7 +66,7 @@ def build_authorize_url(
     return f"{authorize_url}?{urlencode(params)}"
 
 
-def exchange_code(
+async def exchange_code(
     *,
     token_url: str,
     client_id: str,
@@ -85,12 +85,13 @@ def exchange_code(
         "redirect_uri": redirect_uri,
         "state": state,
     }
-    response = httpx.post(
-        token_url,
-        headers={"User-Agent": user_agent},
-        json=body,
-        timeout=timeout,
-    )
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            token_url,
+            headers={"User-Agent": user_agent},
+            json=body,
+            timeout=timeout,
+        )
     if response.status_code != 200:
         raise AuthError(
             f"Token exchange failed: {response.status_code} {response.text}"

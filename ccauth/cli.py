@@ -1,6 +1,7 @@
 """Command-line entry point for ccauth."""
 
 import argparse
+import asyncio
 import json
 import logging
 import sys
@@ -37,8 +38,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        output = run_auth(
-            cookies=load_cookies(args.cookies) if args.cookies else None,
+        output = asyncio.run(
+            run_auth(
+                cookies=load_cookies(args.cookies) if args.cookies else None,
+            )
         )
     except CCAuthError as e:
         print(json.dumps({"error": str(e), **e.extra}))
