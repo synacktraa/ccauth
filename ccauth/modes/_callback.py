@@ -112,4 +112,8 @@ class CallbackServer:
                 raise AuthError(f"OAuth callback error: {self._server.error}")
             raise AuthError("Timed out waiting for OAuth callback")
         finally:
-            self._server.server_close()
+            self.close()
+
+    def close(self) -> None:
+        """Close the server."""
+        self._server.server_close()
