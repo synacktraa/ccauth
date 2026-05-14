@@ -1,5 +1,6 @@
 """Orchestrator: run the Claude Code OAuth flow end-to-end."""
 
+import asyncio
 from collections.abc import Awaitable
 from inspect import iscoroutine
 from typing import TYPE_CHECKING, Any, Protocol
@@ -112,7 +113,8 @@ async def run_auth_custom(cb: CaptureCodeCallback) -> dict[str, Any]:
         }
     }    
 
-async def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+async def run_auth_async(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Async version of run_auth. Use this when calling from an async context."""
     if cookies is not None:
         return await run_auth_custom(
             lambda url, server: cookie_based.open_and_wait(
@@ -123,3 +125,12 @@ async def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any
         return await run_auth_custom(
             lambda url, server: default_browser.open_and_wait(url, server)
         )
+
+
+def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Run the Claude Code OAuth flow end-to-end.
+
+    This is a sync wrapper around run_auth_async(). If you're calling from an
+    async context, use `await run_auth_async(...)` instead.
+    """
+    return asyncio.run(run_auth_async(cookies=cookies))
