@@ -81,6 +81,28 @@ class CallbackServer:
     _server: _Server
     _thread: threading.Thread
 
+    @classmethod
+    def create(cls, *, expected_state: str, path: str) -> "CallbackServer":
+        server = _Server(("localhost", 0), _Handler)
+        server.expected_state = expected_state
+        server.callback_path = path
+        server.auth_code = None
+        server.error = None
+
+        actual_port = server.server_address[1]
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        return cls(
+            port=actual_port,
+            callback_path=path,
+            _server=server,
+            _thread=thread,
+        )
+
+    @property
+    def redirect_uri(self) -> str:
+        return f"http://localhost:{self.port}{self.callback_path}"
+
     def wait_for_code(self, timeout: float = 300.0) -> str:
         self._thread.join(timeout=timeout)
         try:
@@ -91,25 +113,3 @@ class CallbackServer:
             raise AuthError("Timed out waiting for OAuth callback")
         finally:
             self._server.server_close()
-
-
-def start_callback_server(
-    expected_state: str,
-    *,
-    callback_path: str = "/callback",
-) -> CallbackServer:
-    server = _Server(("localhost", 0), _Handler)
-    server.expected_state = expected_state
-    server.callback_path = callback_path
-    server.auth_code = None
-    server.error = None
-
-    actual_port = server.server_address[1]
-    thread = threading.Thread(target=server.handle_request, daemon=True)
-    thread.start()
-    return CallbackServer(
-        port=actual_port,
-        callback_path=callback_path,
-        _server=server,
-        _thread=thread,
-    )
