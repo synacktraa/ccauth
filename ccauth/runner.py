@@ -1,5 +1,8 @@
 """Orchestrator: run the Claude Code OAuth flow end-to-end."""
 
+import asyncio
+from collections.abc import Awaitable
+from inspect import iscoroutine
 from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
@@ -9,7 +12,7 @@ from .modes import cookie_based, default_browser, CallbackServer
 from .oauth import build_authorize_url, exchange_code, generate_pkce, generate_state
 
 if TYPE_CHECKING:
-    from patchright.sync_api import Page
+    from patchright.async_api import Page
 
 AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize"
 TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
@@ -33,26 +36,27 @@ _ORG_TYPE_TO_SUB = {
 }
 
 
-def _click_authorize(page: "Page") -> None:
+async def _click_authorize(page: "Page") -> None:
     """Click the 'Authorize' button on Claude's consent page.
 
     Waits up to 60s for visibility so Cloudflare Turnstile has time to clear.
     """
     btn = page.get_by_role("button", name="Authorize", exact=True).first
-    btn.wait_for(state="visible", timeout=60000)
-    btn.click()
+    await btn.wait_for(state="visible", timeout=60000)
+    await btn.click()
 
 
-def _fetch_profile(access_token: str) -> dict[str, Any]:
-    response = httpx.get(
-        PROFILE_URL,
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-        },
-        timeout=10.0,
-    )
+async def _fetch_profile(access_token: str) -> dict[str, Any]:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            PROFILE_URL,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
+            },
+            timeout=10.0,
+        )
     if response.status_code != 200:
         raise AuthError(
             f"GET {PROFILE_URL} failed: {response.status_code} {response.text}"
@@ -63,10 +67,10 @@ def _fetch_profile(access_token: str) -> dict[str, Any]:
 class CaptureCodeCallback(Protocol):
     def __call__(
         self, authorize_url: str, server: CallbackServer
-    ) -> str: ...
+    ) -> str | Awaitable[str]: ...
 
 
-def run_auth_custom(cb: CaptureCodeCallback) -> dict[str, Any]:
+async def run_auth_custom(cb: CaptureCodeCallback) -> dict[str, Any]:
     pkce = generate_pkce()
     state = generate_state()
 
@@ -82,9 +86,10 @@ def run_auth_custom(cb: CaptureCodeCallback) -> dict[str, Any]:
         extra_params={"code": "true"},
     )
 
-    code = cb(authorize_url, server)
-    
-    tokens = exchange_code(
+    output = cb(authorize_url, server)
+    code = await output if iscoroutine(output) else output
+
+    tokens = await exchange_code(
         token_url=TOKEN_URL,
         client_id=CLIENT_ID,
         code=code,
@@ -94,7 +99,7 @@ def run_auth_custom(cb: CaptureCodeCallback) -> dict[str, Any]:
         user_agent=USER_AGENT,
     )
 
-    profile = _fetch_profile(tokens.access_token)
+    profile = await _fetch_profile(tokens.access_token)
     org = profile.get("organization") or {}
 
     return {
@@ -108,14 +113,34 @@ def run_auth_custom(cb: CaptureCodeCallback) -> dict[str, Any]:
         }
     }    
 
-def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+async def run_auth_async(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Async version of run_auth. Use this when calling from an async context."""
     if cookies is not None:
-        return run_auth_custom(
+        return await run_auth_custom(
             lambda url, server: cookie_based.open_and_wait(
                 url, server, cookies, process_page=_click_authorize
             )
         )
     else:
-        return run_auth_custom(
+        return await run_auth_custom(
             lambda url, server: default_browser.open_and_wait(url, server)
         )
+
+
+def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Run the Claude Code OAuth flow end-to-end.
+
+    This is a sync wrapper around run_auth_async(). If you're calling from an
+    async context, use `await run_auth_async(...)` instead.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop - safe to use asyncio.run()
+        return asyncio.run(run_auth_async(cookies=cookies))
+
+    # There's a running loop - raise a helpful error
+    raise RuntimeError(
+        "run_auth() cannot be called from an async context. "
+        "Use 'await run_auth_async(...)' instead."
+    )

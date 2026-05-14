@@ -3,14 +3,15 @@
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from ..errors import ModeError
 from ._callback import CallbackServer
 
 if TYPE_CHECKING:
-    from patchright.sync_api import Page
+    from patchright.async_api import Page
 
 logger = logging.getLogger(__name__)
 
@@ -68,21 +69,23 @@ def _convert_cookie(c: dict[str, Any]) -> dict[str, Any]:
     return cookie
 
 
-def open_and_wait(
+async def open_and_wait(
     authorize_url: str,
     server: CallbackServer,
     cookies: list[dict[str, Any]],
     *,
-    process_page: Callable[["Page"], None] | None = None,
+    process_page: Callable[["Page"], None | Awaitable[None]] | None = None,
     timeout: float = 180.0,
 ) -> str:
-    from patchright.sync_api import sync_playwright
+    from inspect import iscoroutine
+
+    from patchright.async_api import async_playwright
 
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     callback_pattern = re.compile(rf"localhost:{server.port}{re.escape(server.callback_path)}")
 
-    with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
+    async with async_playwright() as p:
+        context = await p.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE_DIR),
             channel="chrome",
             headless=False,
@@ -94,26 +97,28 @@ def open_and_wait(
             args=["--disable-quic", "--disable-features=UseDnsHttpsSvcb"],
         )
         try:
-            context.add_cookies(cookies)
+            await context.add_cookies(cookies)
         except Exception as e:
-            context.close()
+            await context.close()
             raise ModeError(f"Failed to inject cookies into Chrome: {e}") from e
 
-        page = context.pages[0] if context.pages else context.new_page()
+        page = context.pages[0] if context.pages else await context.new_page()
         logger.info("Navigating to authorize URL...")
-        page.goto(authorize_url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(authorize_url, wait_until="domcontentloaded", timeout=30000)
 
         if process_page is not None:
             try:
-                process_page(page)
+                result = process_page(page)
+                if iscoroutine(result):
+                    await result
             except Exception as e:
                 try:
                     captured_url = page.url
-                    captured_html = page.content()
+                    captured_html = await page.content()
                 except Exception:
                     captured_url = "<unknown>"
                     captured_html = ""
-                context.close()
+                await context.close()
                 raise ModeError(
                     f"process_page failed at {captured_url}: {e}",
                     url=captured_url,
@@ -121,10 +126,10 @@ def open_and_wait(
                 ) from e
 
         try:
-            page.wait_for_url(callback_pattern, timeout=15000)
+            await page.wait_for_url(callback_pattern, timeout=15000)
         except Exception:
             pass
 
-        context.close()
+        await context.close()
 
     return server.wait_for_code(timeout=timeout)
