@@ -133,4 +133,14 @@ def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     This is a sync wrapper around run_auth_async(). If you're calling from an
     async context, use `await run_auth_async(...)` instead.
     """
-    return asyncio.run(run_auth_async(cookies=cookies))
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop - safe to use asyncio.run()
+        return asyncio.run(run_auth_async(cookies=cookies))
+
+    # There's a running loop - raise a helpful error
+    raise RuntimeError(
+        "run_auth() cannot be called from an async context. "
+        "Use 'await run_auth_async(...)' instead."
+    )
