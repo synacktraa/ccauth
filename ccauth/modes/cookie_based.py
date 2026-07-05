@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -82,7 +81,6 @@ async def open_and_wait(
     from patchright.async_api import async_playwright
 
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    callback_pattern = re.compile(rf"localhost:{server.port}{re.escape(server.callback_path)}")
 
     async with async_playwright() as p:
         context = await p.chromium.launch_persistent_context(
@@ -125,11 +123,15 @@ async def open_and_wait(
                     html=captured_html,
                 ) from e
 
+        # Wait for the callback server (running on its own thread) to capture
+        # the OAuth code, polling *asynchronously* so the event loop stays live.
+        # The browser needs a running loop to finish the post-Authorize redirect,
+        # and closing the context is itself an awaited op — a synchronous wait
+        # here would freeze the loop, stranding the redirect and wedging the
+        # browser open even after the code was captured. Tear the browser down
+        # only once we have a result (or time out).
         try:
-            await page.wait_for_url(callback_pattern, timeout=15000)
-        except Exception:
-            pass
-
-        await context.close()
-
-    return server.wait_for_code(timeout=timeout)
+            return await server.wait_for_code_async(timeout=timeout)
+        finally:
+            await context.close()
+            server.close()
