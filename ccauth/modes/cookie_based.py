@@ -130,6 +130,12 @@ async def open_and_wait(
         except Exception:
             pass
 
-        await context.close()
-
-    return server.wait_for_code(timeout=timeout)
+        # Wait for the OAuth code to land on the callback server *before*
+        # tearing down the browser. Closing the context first (as we used to)
+        # meant any redirect slower than the wait_for_url window above could
+        # never be delivered, surfacing as "Timed out waiting for OAuth
+        # callback" even though the Authorize click had succeeded.
+        try:
+            return server.wait_for_code(timeout=timeout)
+        finally:
+            await context.close()
