@@ -1,6 +1,7 @@
 """Local HTTP callback server shared by all modes."""
 
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -90,7 +91,11 @@ class CallbackServer:
         server.error = None
 
         actual_port = server.server_address[1]
-        thread = threading.Thread(target=server.handle_request, daemon=True)
+        # serve_forever (not handle_request) so stray non-callback hits — a
+        # favicon probe, a preconnect, anything Chrome fires at the loopback —
+        # get their 404 without consuming the server. It keeps serving until
+        # the real callback lands; wait_for_code() shuts it down.
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         return cls(
             port=actual_port,
@@ -104,16 +109,19 @@ class CallbackServer:
         return f"http://localhost:{self.port}{self.callback_path}"
 
     def wait_for_code(self, timeout: float = 300.0) -> str:
-        self._thread.join(timeout=timeout)
+        deadline = time.monotonic() + timeout
         try:
-            if self._server.auth_code:
-                return self._server.auth_code
-            if self._server.error:
-                raise AuthError(f"OAuth callback error: {self._server.error}")
+            while time.monotonic() < deadline:
+                if self._server.auth_code:
+                    return self._server.auth_code
+                if self._server.error:
+                    raise AuthError(f"OAuth callback error: {self._server.error}")
+                time.sleep(0.05)
             raise AuthError("Timed out waiting for OAuth callback")
         finally:
             self.close()
 
     def close(self) -> None:
-        """Close the server."""
+        """Stop the serve_forever loop and release the socket."""
+        self._server.shutdown()
         self._server.server_close()
