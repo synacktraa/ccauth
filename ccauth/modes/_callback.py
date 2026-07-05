@@ -1,5 +1,6 @@
 """Local HTTP callback server shared by all modes."""
 
+import asyncio
 import threading
 import time
 from dataclasses import dataclass
@@ -108,18 +109,40 @@ class CallbackServer:
     def redirect_uri(self) -> str:
         return f"http://localhost:{self.port}{self.callback_path}"
 
+    def poll(self) -> str | None:
+        """Non-blocking check: return the captured code, raise on a callback
+        error, or return None if nothing has arrived yet."""
+        if self._server.auth_code:
+            return self._server.auth_code
+        if self._server.error:
+            raise AuthError(f"OAuth callback error: {self._server.error}")
+        return None
+
     def wait_for_code(self, timeout: float = 300.0) -> str:
+        """Blocking wait — for system-browser mode, where nothing on this
+        thread needs to keep running while we wait. Closes the server on exit."""
         deadline = time.monotonic() + timeout
         try:
             while time.monotonic() < deadline:
-                if self._server.auth_code:
-                    return self._server.auth_code
-                if self._server.error:
-                    raise AuthError(f"OAuth callback error: {self._server.error}")
+                result = self.poll()
+                if result is not None:
+                    return result
                 time.sleep(0.05)
             raise AuthError("Timed out waiting for OAuth callback")
         finally:
             self.close()
+
+    async def wait_for_code_async(self, timeout: float = 300.0) -> str:
+        """Async wait that never blocks the event loop, so a Playwright-driven
+        browser can still finish delivering the callback while we wait. Does not
+        close the server — the caller closes it after tearing down the browser."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            result = self.poll()
+            if result is not None:
+                return result
+            await asyncio.sleep(0.1)
+        raise AuthError("Timed out waiting for OAuth callback")
 
     def close(self) -> None:
         """Stop the serve_forever loop and release the socket."""

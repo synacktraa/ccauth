@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -82,7 +81,6 @@ async def open_and_wait(
     from patchright.async_api import async_playwright
 
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    callback_pattern = re.compile(rf"localhost:{server.port}{re.escape(server.callback_path)}")
 
     async with async_playwright() as p:
         context = await p.chromium.launch_persistent_context(
@@ -125,22 +123,15 @@ async def open_and_wait(
                     html=captured_html,
                 ) from e
 
-        # Give the post-Authorize redirect room to complete. Claude sometimes
-        # takes well over 15s (extra interstitial, slow token issuance, sandbox
-        # network latency) before bouncing back to the loopback. This resolves
-        # as soon as the redirect lands, so a larger cap costs nothing on the
-        # happy path; it just avoids falling through to wait_for_code early.
+        # Wait for the callback server (running on its own thread) to capture
+        # the OAuth code, polling *asynchronously* so the event loop stays live.
+        # The browser needs a running loop to finish the post-Authorize redirect,
+        # and closing the context is itself an awaited op — a synchronous wait
+        # here would freeze the loop, stranding the redirect and wedging the
+        # browser open even after the code was captured. Tear the browser down
+        # only once we have a result (or time out).
         try:
-            await page.wait_for_url(callback_pattern, timeout=60000)
-        except Exception:
-            pass
-
-        # Wait for the OAuth code to land on the callback server *before*
-        # tearing down the browser. Closing the context first (as we used to)
-        # meant any redirect slower than the wait_for_url window above could
-        # never be delivered, surfacing as "Timed out waiting for OAuth
-        # callback" even though the Authorize click had succeeded.
-        try:
-            return server.wait_for_code(timeout=timeout)
+            return await server.wait_for_code_async(timeout=timeout)
         finally:
             await context.close()
+            server.close()
