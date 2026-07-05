@@ -125,8 +125,13 @@ async def open_and_wait(
                     html=captured_html,
                 ) from e
 
+        # Give the post-Authorize redirect room to complete. Claude sometimes
+        # takes well over 15s (extra interstitial, slow token issuance, sandbox
+        # network latency) before bouncing back to the loopback. This resolves
+        # as soon as the redirect lands, so a larger cap costs nothing on the
+        # happy path; it just avoids falling through to wait_for_code early.
         try:
-            await page.wait_for_url(callback_pattern, timeout=15000)
+            await page.wait_for_url(callback_pattern, timeout=60000)
         except Exception:
             pass
 
