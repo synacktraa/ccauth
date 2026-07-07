@@ -110,3 +110,60 @@ async def exchange_code(
         scopes=scopes,
         raw=data,
     )
+
+
+async def refresh_access_token(
+    *,
+    token_url: str,
+    client_id: str,
+    refresh_token: str,
+    user_agent: str,
+    timeout: float = 15.0,
+) -> TokenResult:
+    """Mint a new access token from a refresh token (grant_type=refresh_token).
+
+    Claude rotates the refresh token on every call; if the response omits one,
+    the returned token is empty (see below). Raises AuthError with
+    ``refresh_expired=True`` when the refresh token is rejected (invalid_grant),
+    so callers can distinguish "re-run the full OAuth flow" from a transient error.
+    """
+    body = {
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "refresh_token": refresh_token,
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            token_url,
+            headers={"User-Agent": user_agent},
+            json=body,
+            timeout=timeout,
+        )
+    if response.status_code != 200:
+        text = response.text
+        if response.status_code in (400, 401) and (
+            "invalid_grant" in text or "invalid_token" in text or "expired" in text
+        ):
+            raise AuthError(
+                f"Refresh token rejected: {response.status_code} {text}",
+                refresh_expired=True,
+            )
+        raise AuthError(f"Token refresh failed: {response.status_code} {text}")
+
+    data = response.json()
+    missing = [k for k in ("access_token", "expires_in") if k not in data]
+    if missing:
+        raise AuthError(f"Refresh response missing fields: {missing}")
+
+    scopes = data["scope"].split(" ") if data.get("scope") else []
+    return TokenResult(
+        access_token=data["access_token"],
+        # Claude rotates the refresh token on every refresh, so a missing one is
+        # anomalous. Return empty rather than silently reusing the old (now
+        # likely invalidated) token — an empty token makes the next refresh fail
+        # cleanly and fall back to the full OAuth flow.
+        refresh_token=data.get("refresh_token", ""),
+        expires_at_ms=int(time.time() * 1000) + data["expires_in"] * 1000,
+        scopes=scopes,
+        raw=data,
+    )
