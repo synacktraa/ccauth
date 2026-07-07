@@ -2,10 +2,11 @@
 
 Automate the Claude Code OAuth flow. `ccauth` runs the full PKCE handshake against Anthropic's OAuth endpoints and prints the native `~/.claude/.credentials.json` payload as JSON on stdout — suitable for piping into a file, a sandbox bootstrap script, or a secrets manager.
 
-Two modes:
+Three modes:
 
 - **Default-browser** (interactive): opens the authorize URL in your system browser; you click **Authorize**; ccauth captures the callback on a local loopback port and exchanges it.
 - **Cookie-based** (unattended): with exported `claude.ai` cookies, patchright drives a headed Chrome through the consent click — including Cloudflare Turnstile — without any user interaction.
+- **Refresh** (renewal): given an existing refresh token, mint a new access token with a plain HTTP call — no browser, no Cloudflare. Use this for routine renewals and fall back to one of the flows above only when the refresh token itself expires.
 
 ## Install
 
@@ -33,6 +34,14 @@ ccauth --cookies path/to/cookies.json
 ```
 
 `--cookies` accepts a file path or a raw JSON string. The format is a Cookie-Editor export of `claude.ai`.
+
+Refresh mode (renew from an existing refresh token — no browser):
+
+```bash
+ccauth --refresh "sk-ant-ort01-<...>"
+```
+
+`--refresh` mints a new access token via `grant_type=refresh_token` and prints the same payload. It takes precedence over `--cookies`. Claude rotates the refresh token on every call, so persist the new one from the output. When the refresh token is expired or revoked, the error JSON includes `"refresh_expired": true` — that's your signal to re-run one of the browser flows.
 
 Output shape (exactly what Claude Code expects in `~/.claude/.credentials.json`):
 
@@ -87,10 +96,14 @@ This is the headless-friendly path. The trick: Anthropic's `/oauth/authorize` pa
 
 If step 5 throws (e.g. the button never appears), the raised `ModeError` carries the final page URL and full HTML as `url` and `html` fields in the CLI's error JSON, so you can see what Cloudflare or Anthropic actually rendered.
 
+### Refresh mode
+
+No browser at all. `ccauth --refresh <token>` POSTs `grant_type=refresh_token` to the same token endpoint and reshapes the response into the standard payload — including a call to `api.anthropic.com/api/oauth/profile` for `subscriptionType`/`rateLimitTier`, which the token response omits. Anthropic **rotates** the refresh token on every call (returning a new one and invalidating the old), so the returned token must be persisted. If the refresh token is rejected, the error JSON carries `"refresh_expired": true` so callers can distinguish "re-run the full OAuth flow" from a transient failure.
+
 ## Python API
 
 ```python
-from ccauth import run_auth
+from ccauth import run_auth, run_refresh
 
 # Default-browser mode
 creds = run_auth()
@@ -99,4 +112,7 @@ creds = run_auth()
 import json
 cookies = json.load(open("path/to/cookies.json"))
 creds = run_auth(cookies=cookies)
+
+# Refresh mode (renew from an existing refresh token — no browser)
+creds = run_refresh("sk-ant-ort01-<...>")
 ```

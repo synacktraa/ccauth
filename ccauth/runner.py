@@ -9,7 +9,14 @@ import httpx
 
 from .errors import AuthError
 from .modes import cookie_based, default_browser, CallbackServer
-from .oauth import build_authorize_url, exchange_code, generate_pkce, generate_state
+from .oauth import (
+    TokenResult,
+    build_authorize_url,
+    exchange_code,
+    generate_pkce,
+    generate_state,
+    refresh_access_token,
+)
 
 if TYPE_CHECKING:
     from patchright.async_api import Page
@@ -64,6 +71,25 @@ async def _fetch_profile(access_token: str) -> dict[str, Any]:
     return response.json()
 
 
+async def _tokens_to_credentials(tokens: TokenResult) -> dict[str, Any]:
+    """Build the ~/.claude/.credentials.json shape from a token result, fetching
+    the profile for subscription/rate-limit info (not present on the token
+    response). Shared by both the OAuth and refresh flows so their output matches.
+    """
+    profile = await _fetch_profile(tokens.access_token)
+    org = profile.get("organization") or {}
+    return {
+        "claudeAiOauth": {
+            "accessToken": tokens.access_token,
+            "refreshToken": tokens.refresh_token,
+            "expiresAt": tokens.expires_at_ms,
+            "scopes": tokens.scopes,
+            "subscriptionType": _ORG_TYPE_TO_SUB.get(org.get("organization_type") or ""),
+            "rateLimitTier": org.get("rate_limit_tier"),
+        }
+    }
+
+
 class CaptureCodeCallback(Protocol):
     def __call__(
         self, authorize_url: str, server: CallbackServer
@@ -99,19 +125,7 @@ async def run_auth_custom(cb: CaptureCodeCallback) -> dict[str, Any]:
         user_agent=USER_AGENT,
     )
 
-    profile = await _fetch_profile(tokens.access_token)
-    org = profile.get("organization") or {}
-
-    return {
-        "claudeAiOauth": {
-            "accessToken": tokens.access_token,
-            "refreshToken": tokens.refresh_token,
-            "expiresAt": tokens.expires_at_ms,
-            "scopes": tokens.scopes,
-            "subscriptionType": _ORG_TYPE_TO_SUB.get(org.get("organization_type") or ""),
-            "rateLimitTier": org.get("rate_limit_tier"),
-        }
-    }    
+    return await _tokens_to_credentials(tokens)
 
 async def run_auth_async(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Async version of run_auth. Use this when calling from an async context."""
@@ -143,4 +157,37 @@ def run_auth(cookies: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     raise RuntimeError(
         "run_auth() cannot be called from an async context. "
         "Use 'await run_auth_async(...)' instead."
+    )
+
+
+async def run_refresh_async(refresh_token: str) -> dict[str, Any]:
+    """Mint a new access token from a refresh token — no browser, just HTTP.
+
+    Emits the same shape as run_auth. Raises AuthError with
+    ``refresh_expired=True`` when the refresh token is rejected, so the caller
+    can fall back to the full OAuth flow.
+    """
+    tokens = await refresh_access_token(
+        token_url=TOKEN_URL,
+        client_id=CLIENT_ID,
+        refresh_token=refresh_token,
+        user_agent=USER_AGENT,
+    )
+    return await _tokens_to_credentials(tokens)
+
+
+def run_refresh(refresh_token: str) -> dict[str, Any]:
+    """Sync wrapper around run_refresh_async(). If you're calling from an async
+    context, use `await run_refresh_async(...)` instead.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop - safe to use asyncio.run()
+        return asyncio.run(run_refresh_async(refresh_token))
+
+    # There's a running loop - raise a helpful error
+    raise RuntimeError(
+        "run_refresh() cannot be called from an async context. "
+        "Use 'await run_refresh_async(...)' instead."
     )

@@ -7,7 +7,7 @@ import sys
 
 from .errors import CCAuthError
 from .modes.cookie_based import load_cookies
-from .runner import run_auth
+from .runner import run_auth, run_refresh
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,6 +21,14 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="Cookie-Editor JSON for claude.ai: file path or raw JSON string. "
         "When provided, uses cookie-based mode (patchright + headed Chrome) instead of launching the default browser.",
+    )
+    parser.add_argument(
+        "--refresh",
+        default=None,
+        metavar="TOKEN",
+        help="Refresh token. When provided, mint a new access token via "
+        "grant_type=refresh_token (a plain HTTP call — no browser) instead of "
+        "running the OAuth flow. Emits the same JSON. Takes precedence over --cookies.",
     )
     parser.add_argument(
         "-v",
@@ -37,9 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        output = run_auth(
-            cookies=load_cookies(args.cookies) if args.cookies else None,
-        )
+        if args.refresh:
+            output = run_refresh(args.refresh)
+        else:
+            output = run_auth(
+                cookies=load_cookies(args.cookies) if args.cookies else None,
+            )
     except CCAuthError as e:
         print(json.dumps({"error": str(e), **e.extra}))
         return 1
